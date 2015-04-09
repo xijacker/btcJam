@@ -7,6 +7,7 @@ import matplotlib.lines as lines
 from localDBConnection import LocalSql
 from collections import deque
 import sys
+from DAConfig import *
 
 MARKERS = ['o', '+']
 COLORS = ['r', 'b', 'g', 'c', 'm', 'y', 'k', 'r', 'b', 'g', 'c', 'm', 'y', 'k'] 
@@ -21,15 +22,17 @@ class CohortAnalysis:
 	def __init__(self):
 		self._sc = SparkContext("local", "btcJam Cohort Analysis")
 		localDbConn = LocalSql(self._sc)
-#		self._curDate = datetime.date.today()
-		self._curDate = datetime.date(2015,04,6)
+		self._curDate = datetime.date.today()
+#		self._curDate = datetime.date(2015,06,6)
 		self._cur = localDbConn.getCursor()
 		self._sqlContext = localDbConn.getSqlContext()
 		self._conn	= localDbConn.getConn()
-		self._AVERAGE_DAYS = 30 # number of days to calculate the average 
-		self._DevelopedCountries = set(['AD','AT','AU','BE','CA','CH','DE','DK','ES', 'IE','EU','FI','FR','GB','GG','GI','HK','IM','IR','IS','IT','JE','JP','KR','LU','MC','MP','MT','NL','NO','NZ','PT','RE','SE','SG','SM','SV','SZ','UK','US','A1', 'United States', 'United Kingdom', 'Belgium', 'Australia', 'Italy']) 
+		self._AVERAGE_DAYS = DA_WINDOW_DAYS # number of days to calculate the average 
 		self.legends = []
 
+	def getDevelopedCountries(self):
+		return self._DevelopedCountries	
+		
 	def readData(self):
 		if self._conn != None:
 			self._cur.execute("SELECT id, loan_id, dtpayment, dtpaid, total_multi_payments, multi_payment_number FROM multi_payments WHERE dtpayment < Now()")
@@ -88,6 +91,7 @@ class CohortAnalysis:
 		X = []
 		Y = []
 		Y1 = []
+		Y2 = []
 		for a in dtPaymentsCollect: # while curDay <= self._curDate:
 			selectedDate = a[0]
 			if selectedDate > self._curDate:
@@ -123,14 +127,19 @@ class CohortAnalysis:
 				X.append(preAddedDate)
 				Y.append(sumLatePay*100.0/(sumLatePay + sumOntimePay))
 				Y1.append(sumLatePay + sumOntimePay)
-		plt.subplot(2, 1, 1)		
+				Y2.append(sumLatePay)
+		plt.subplot(3, 1, 1)		
 		plt.plot(X, Y, color = clr, marker='+', label = label)
 		plt.ylabel('Late payback ratio in the past ' + str(days) + ' days')		
 		plt.legend()
 
-		plt.subplot(2, 1, 2)		
+		plt.subplot(3, 1, 2)		
 		plt.plot(X, Y1, color = clr, marker='+')
 		plt.ylabel('Total due payments in the past ' + str(days) + ' days')		
+
+		plt.subplot(3, 1, 3)		
+		plt.plot(X, Y2, color = clr, marker='+')
+		plt.ylabel('Total late Payments in the past ' + str(days) + ' days')		
 	
 		plt.legend()
 		
@@ -287,12 +296,12 @@ class CohortAnalysis:
 		dtPayments =self._multiPayments.map(lambda s: (s[1], s)).join(loansJoinedUsers).values()
 		print dtPayments.take(300)
 
-		if cohortType == 'PAYMENTDAY':	
+		if DA_COHORT_TYPE == 'PAYMENTDAY':	
 			''' cohort analysis based on payment days'''
 			# dtPayments for all loans with pay count of late payment, ontime payment, never payed back, and country 
 			dtPayments = dtPayments.map(lambda s : (s[0][2], (1 if s[0][3] is not None and s[0][2] >= s[0][3] else 0, 1 if s[0][3] is None or s[0][2] < s[0][3] else 0, 1 if s[0][3] is None else 0, s[1], s[0][5])))
 			print dtPayments.take(100)
-		elif cohortType == 'CREATEDDAY':
+		elif DA_COHORT_TYPE == 'CREATEDDAY':
 			''' cohort analysis based on created at date'''
 			# dtPayments for all loans with count number of late payment, ontime payment, never payback, and country
 			dtPayments = dtPayments.map(lambda s : (s[1][1].date(), (1 if s[0][3] is not None and s[0][2] >= s[0][3] else 0, 1 if s[0][3] is None or s[0][2] < s[0][3] else 0, 1 if s[0][3] is None else 0, s[1], s[0][5])))
@@ -303,12 +312,8 @@ class CohortAnalysis:
 			# Total late payback ratio
 			self.totalLatePaymentRatioForCreatedDay(dtPayments)
 
-			# Late payback ratio ralated to developed/undeveloped countries
-			self.groupLatePaymentRatio(dtPayments, self._DevelopedCountries, True)
-
 			# Late payback ration ralated to developed/undeveloped countries
-#			country = ['US', 'United States'] #['BR', 'CA']
-#			self.groupLatePaymentRatio(dtPayments, country, True, country[0])
+			self.groupLatePaymentRatio(dtPayments, DA_GROUP, True, DA_GROUP_DESCRIPTION)
 
 			plt.xlabel (cohortType + ' Based')
 			plt.show()
@@ -319,18 +324,16 @@ class CohortAnalysis:
 def main(argv):
 	cohort = CohortAnalysis()
 	cohort.readData()
-	paymentType = 'CREATEDDAY' #or 'PAYMENTDAY'
-	displayType = 'MONTHLY' # or 'LONGPERIOD' 
+	paymentType = DA_COHORT_TYPE
+	analysisType = DA_ANALYSIS_TYPE 
 
-	if len(argv) > 0:
-		paymentType = argv[0]
-		print "+++++++++++++++++++  " + paymentType 
-	if len(argv) > 1:
-		displayType = argv[1]
-		if argv[0] == 'MONTHLY':
-			paymentType = 'CREATEDDAY'
-		print "-------------------  " + displayType 
-	
+	if analysisType not in DA_ANALYSIS_TYPES: 
+		analysisType == 'MONTHLY'
+	if analysisType == 'MONTHLY':
+		paymentType = 'CREATEDDAY'
+	if paymentType not in DA_COHORT_TYPE:
+		paymentType = CREATEDDAY
+
 #	cohort.dailyPaments()
 # 	plt.subplot(2,1,1)
 
@@ -341,7 +344,7 @@ def main(argv):
 #	cohort.cohortDailyPaments('CREATEDDAY', 'LONGPERIOD')
 
 	# all the data based on payment date for all the period
-	cohort.cohortDailyPaments(paymentType, displayType)
+	cohort.cohortDailyPaments(paymentType, analysisType)
 
 	'''
 	plt.subplot(2,1,2)
